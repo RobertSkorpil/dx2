@@ -13,18 +13,123 @@
 #include <stdexcept>
 #include <random>
 
+#include <iostream>
+
 #include <Eigen/Dense>
 
+using vec3 = Eigen::Vector3f;
+using vec4 = Eigen::Vector4f;
+using mat3 = Eigen::Matrix3f;
+using mat4 = Eigen::Matrix4f;
+
+struct camera
+{
+	vec3 position{ 0.f, 0.f, 0.f };
+	vec3 look_at{ 0.f, 0.f, 0.f };
+
+	mat4 matrix()
+	{
+		vec3 up{ 0.0f, 1.0f, 0.0f };
+		vec3 forward = (look_at - position).normalized();
+		vec3 right = up.cross(forward).normalized();
+
+		float f = 20;
+		float n = 3;
+
+		mat4 M, P;
+		M <<
+			right.x(), up.x(), forward.x(), position.x(),
+			right.y(), up.y(), forward.y(), position.y(),
+			right.z(), up.z(), forward.z(), position.z(),
+			0, 0, 0, 1;
+
+		M = M.inverse().eval();
+
+		vec4 t = M * vec4{ 0.f, 0.f, 0.f, 1.f };
+
+		return M;
+	}
+};
+
+struct player
+{
+	vec3 position{ 0.0f, 0.0f, 0.0f };
+	float dir = 0;
+
+	bool key_up{}, key_down{}, key_left{}, key_right{}, key_pgup{}, key_pgdown{};
+
+	mat3 rot() const
+	{
+		mat3 r;
+		r <<
+			cosf(dir), 0, -sinf(dir),
+			0, 1, 0,
+			sinf(dir), 0, cosf(dir);
+
+		return r;
+	}
+
+	camera cam() const
+	{
+		camera cam;
+		cam.position = position;
+
+		cam.look_at = cam.position + rot() * vec3{ 0.f, 0.f, 1.f };
+
+		return cam;
+	}
+
+	void step()
+	{
+		dir += key_left * .1f + key_right * -.1f;
+		vec3 velocity = rot() * vec3 { 0.f, key_pgup * .1f + key_pgdown * -.1f, key_up * .1f + key_down * -.1f };
+		position += velocity;
+	}
+} player1;
+
+void handle_key(WPARAM virtual_key, bool up)
+{
+	switch (virtual_key)
+	{
+	case VK_UP:
+		player1.key_up = !up;
+		break;
+	case VK_DOWN:
+		player1.key_down = !up;
+		break;
+	case VK_LEFT:
+		player1.key_left = !up;
+		break;
+	case VK_RIGHT:
+		player1.key_right = !up;
+		break;	
+	case VK_PRIOR:
+		player1.key_pgup = !up;
+		break;	
+	case VK_NEXT:
+		player1.key_pgdown = !up;
+		break;	
+	}
+}
 
 LRESULT windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
+	static int timer = 0;
 	switch (msg)
 	{
 	case WM_CLOSE:
 		PostMessage(hwnd, WM_QUIT, 0, 0);
 		return 0;
 	case WM_TIMER:
-		SetTimer(hwnd, 1, 10, nullptr);
+		std::cout << "Timer " << timer++ << "\n";
+		player1.step();
+		SetTimer(hwnd, 1, 20, nullptr);
+		return 0;
+	case WM_KEYDOWN:
+		handle_key(wparam, false);
+		return 0;
+	case WM_KEYUP:
+		handle_key(wparam, true);
 		return 0;
 	default:
 		return DefWindowProc(hwnd, msg, wparam, lparam);
@@ -80,10 +185,6 @@ pixel_shader create_pixel_shader(std::wstring_view file, ID3D11Device *device)
 	return result;
 }
 
-using vec3 = Eigen::Vector3f;
-using vec4 = Eigen::Vector4f;
-using mat4 = Eigen::Matrix4f;
-
 struct vertex_data
 {
 	vec4 position;
@@ -104,7 +205,7 @@ struct d3d_device
 	d3d_device()
 	{
 		D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
+		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
 		device = baseDevice;
 		deviceContext = baseDeviceContext;
 		dxgiDevice = device;
@@ -236,8 +337,8 @@ struct cube_mesh : mesh
 		auto rot1 = [](float alpha) {
 			mat4 rot;
 			rot <<
-				cosf(alpha), -sinf(alpha), 0.f, 0.f,
-				sinf(alpha), cosf(alpha), 0.f, 0.f,
+				cosf(alpha), sinf(alpha), 0.f, 0.f,
+				-sinf(alpha), cosf(alpha), 0.f, 0.f,
 				0.f, 0.f, 1.f, 0.f,
 				0.f, 0.f, 0.f, 1.f;
 			return rot;
@@ -297,44 +398,6 @@ struct cube_mesh : mesh
 		}
 	}
 };
-
-struct camera
-{
-	vec4 position{ 0.f, 0.f, 0.f, 1.f };
-	vec4 look_at{ 0.f, 1.f, 1.f, 1.f };
-	vec4 up{ 1.0f, 0.0f, 0.0f, 0.0f };
-
-	mat4 matrix()
-	{
-		vec4 origin{ 0.0f, 0.0f, 0.0f, 1.0f };
-		auto r = origin - position;
-		mat4 P, R;
-		P <<
-			0, 0, 0, 0,
-			0, 0, 0, 0,
-			0, 0, 0, 0,
-			r.x(), r.y(), r.z(), 1;
-
-		vec3 forward{ 0.f, 0.f, 1.f };
-		vec3 eye = (look_at.hnormalized() - position.hnormalized()).normalized();
-		auto rot_axis = eye.cross(forward).normalized();
-		auto& u = rot_axis;
-		auto rot_angle = acosf(eye.dot(forward));
-		auto cr = cosf(rot_angle);
-		auto sr = sinf(rot_angle);
-		auto rot_quat = vec4{ eye.dot(forward), rot_axis.x(), rot_axis.y(), rot_axis.z(), };
-		R <<
-			cr + u.x() * u.x() * (1 - cr), u.x()* u.y()* (1 - cr) - u.z() * sr, u.x()* u.z()* (1 - cr) + u.y() * sr, 0,
-			u.y()* u.x()* (1 - cr) + u.z() * sr, cr + u.y() * u.y() * (1 - cr), u.y()* u.z()* (1 - cr) - u.x() * sr, 0,
-			u.z()* u.x()* (1 - cr) - u.y() * sr, u.z()* u.y()* (1 - cr) + u.x() * sr, cr + u.z() * u.z() * (1 - cr), 0,
-			0, 0, 0, 1;
-
-		auto M = R * P;
-
-		return M;
-	}
-};
-
 struct constants
 {
 	mat4 cam;
@@ -349,8 +412,6 @@ size_t round_up(size_t size)
 int main()
 {
 	camera cam;
-	cam.matrix();
-	return 0;
 
 	(void)CoInitialize(nullptr);
 
@@ -368,7 +429,7 @@ int main()
 	auto swapChain = device.create_swap_chain(hwnd);
 
 	D3D11_BUFFER_DESC constantBufferDesc{};
-	constantBufferDesc.ByteWidth = round_up(sizeof(constantBufferDesc));
+	constantBufferDesc.ByteWidth = round_up(sizeof(constants));
 	constantBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
 	constantBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	constantBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -393,9 +454,9 @@ int main()
 	device->CreateDepthStencilView(depthBuffer, nullptr, &depthBufferView);
 
 	D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
-	depthStencilDesc.DepthEnable = TRUE;
+	depthStencilDesc.DepthEnable = FALSE;
 	depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-	depthStencilDesc.DepthFunc = D3D11_COMPARISON_LESS;
+	depthStencilDesc.DepthFunc = D3D11_COMPARISON_GREATER;
 	CComPtr<ID3D11DepthStencilState> depthStencilState;
 	device->CreateDepthStencilState(&depthStencilDesc, &depthStencilState);
 
@@ -430,26 +491,27 @@ int main()
 
 	std::vector<cube_mesh> cubes;
 
-	int n = 7;
-	for (int k = 0; k < n; ++k)
-	for (int i = 0; i < n; ++i)
-	{
-		cube_mesh c0{ device, vec4 { -0.5f + i / float(n), 0.f, -0.5f + k / float(n), 1 }, .4f / n };
-		cubes.push_back(std::move(c0));
-	}
-//	cube_mesh c0{ device, vec4 { 0.f, 0.f, 0.f, 1.f }, 0.4f };
-//	cubes.push_back(std::move(c0));
+	//int n = 7;
+	//for (int k = 0; k < n; ++k)
+	//for (int i = 0; i < n; ++i)
+	//{
+	//	cube_mesh c0{ device, vec4 { -5.f + i / float(n) * 10, 0.f, -5.f + k / float(n) * 10, 1 }, 4.f / n };
+	//	cubes.push_back(std::move(c0));
+	//}	
+	cube_mesh c0{ device, vec4 { 0.f, 0.f, 20.f, 1.f }, 0.9f };
+	cubes.push_back(std::move(c0));
 
 	double alpha = 0;
 	auto rot1 = [](float alpha) {
 		mat4 rot;
 		rot <<
-			cosf(alpha), -sinf(alpha), 0.f, 0.f,
-			sinf(alpha), cosf(alpha), 0.f, 0.f,
+			cosf(alpha), sinf(alpha), 0.f, 0.f,
+			-sinf(alpha), cosf(alpha), 0.f, 0.f,
 			0.f, 0.f, 1.f, 0.f,
 			0.f, 0.f, 0.f, 1.f;
 		return rot;
 	};
+
 	for (;;)
 	{
 		MSG msg;
@@ -464,11 +526,12 @@ int main()
 		D3D11_MAPPED_SUBRESOURCE mappedSubresource;
 		deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubresource);
 		auto cnst = reinterpret_cast<constants*>(mappedSubresource.pData);
-		cnst->light = rot1(alpha) * vec4 { 1.f, 0.f, 0.f, 0.f };
+		//cnst->light = rot1(alpha) * vec4 { 1.f, 0.f, 0.f, 0.f };
+		cnst->cam = player1.cam().matrix();
 		deviceContext->Unmap(constantBuffer, 0);
 
 		deviceContext->ClearRenderTargetView(frameBufferView, (std::array<float, 4> { 0.1, 0.2, 0.2, 1.0 }).data());
-		deviceContext->ClearDepthStencilView(depthBufferView, D3D11_CLEAR_DEPTH, 1.f, 0);
+		deviceContext->ClearDepthStencilView(depthBufferView, D3D11_CLEAR_DEPTH, 0.f, 0);
 
 		deviceContext->IASetInputLayout(inputLayout);
 
