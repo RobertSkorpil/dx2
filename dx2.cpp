@@ -26,12 +26,12 @@ struct camera
 {
 	vec3 position{ 0.f, 0.f, 0.f };
 	vec3 look_at{ 0.f, 0.f, 0.f };
+	vec3 up{ 0.0f, 1.0f, 0.0f };
 
 	mat4 matrix()
 	{
-		vec3 up{ 0.0f, 1.0f, 0.0f };
 		vec3 forward = (look_at - position).normalized();
-		vec3 right = up.cross(forward).normalized();
+		vec3 right = forward.cross(up).normalized();
 
 		float f = 20;
 		float n = 3;
@@ -55,8 +55,10 @@ struct player
 {
 	vec3 position{ 0.0f, 0.0f, 0.0f };
 	float dir = 0;
+	float dir2 = 0;
+	float f = 1;
 
-	bool key_up{}, key_down{}, key_left{}, key_right{}, key_pgup{}, key_pgdown{};
+	bool key_up{}, key_down{}, key_left{}, key_right{}, key_pgup{}, key_pgdown{}, key_home{}, key_end{};
 
 	mat3 rot() const
 	{
@@ -69,19 +71,31 @@ struct player
 		return r;
 	}
 
+	mat3 rot2() const
+	{
+		mat3 r;
+		r <<
+			1, 0, 0,
+			0, cosf(dir2), -sinf(dir2),
+			0, sinf(dir2), cosf(dir2);
+
+		return r;
+	}
+
 	camera cam() const
 	{
 		camera cam;
 		cam.position = position;
-
-		cam.look_at = cam.position + rot() * vec3{ 0.f, 0.f, 1.f };
+		cam.up = rot() * rot2() * vec3{ 0.f, 1.f, 0.f };
+		cam.look_at = cam.position + rot() * rot2() * vec3{ 0.f, 0.f, .1f };
 
 		return cam;
 	}
 
 	void step()
 	{
-		dir += key_left * .1f + key_right * -.1f;
+		dir += key_left * -.1f + key_right * .1f;
+		dir2 += key_home * -.1f + key_end * .1f;
 		vec3 velocity = rot() * vec3 { 0.f, key_pgup * .1f + key_pgdown * -.1f, key_up * .1f + key_down * -.1f };
 		position += velocity;
 	}
@@ -109,9 +123,16 @@ void handle_key(WPARAM virtual_key, bool up)
 	case VK_NEXT:
 		player1.key_pgdown = !up;
 		break;	
+	case VK_HOME:
+		player1.key_home = !up;
+		break;	
+	case VK_END:
+		player1.key_end = !up;
+		break;	
 	}
 }
 
+bool draw = false;
 LRESULT windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
 	static int timer = 0;
@@ -121,6 +142,7 @@ LRESULT windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		PostMessage(hwnd, WM_QUIT, 0, 0);
 		return 0;
 	case WM_TIMER:
+		draw = true;
 		std::cout << "Timer " << timer++ << "\n";
 		player1.step();
 		SetTimer(hwnd, 1, 20, nullptr);
@@ -189,7 +211,7 @@ struct vertex_data
 {
 	vec4 position;
 	vec4 normal;
-	vec4 color;
+	vec4 tex_coord;
 };
 
 struct d3d_device
@@ -205,7 +227,7 @@ struct d3d_device
 	d3d_device()
 	{
 		D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
+		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
 		device = baseDevice;
 		deviceContext = baseDeviceContext;
 		dxgiDevice = device;
@@ -359,11 +381,11 @@ struct cube_mesh : mesh
 			return (v - origin).normalized() + origin;
 		};
 
-		vec4 normal{ m_scale, 0.f, 0.f, 1.f };
-		vec4 dir0{ 0.f, m_scale, m_scale, 0.f };
-		vec4 dir1{ 0.f, m_scale, -m_scale, 0.f };
-		vec4 dir2{ 0.f, -m_scale, -m_scale, 0.f };
-		vec4 dir3{ 0.f, -m_scale, m_scale, 0.f };
+		vec4 normal{ m_scale / 2, 0.f, 0.f, 0.f };
+		vec4 dir0{ 0.f, m_scale / 2, m_scale / 2, 0.f };
+		vec4 dir1{ 0.f, m_scale / 2, -m_scale / 2, 0.f };
+		vec4 dir2{ 0.f, -m_scale / 2, -m_scale / 2, 0.f };
+		vec4 dir3{ 0.f, -m_scale / 2, m_scale / 2, 0.f };
 
 		for (int i = 0; i < 6; ++i)
 		{
@@ -380,20 +402,25 @@ struct cube_mesh : mesh
 			auto d3 = rot * dir3 + n;
 
 			auto id0 = m_vertices.size();
-			m_vertices.push_back({ d0 + m_point, norm(n), m_color });
+			m_vertices.push_back({ d0 + m_point, norm(n), vec4{ 1.0f, 1.f, 0.f, 0.f } });
 			auto id1 = m_vertices.size();
-			m_vertices.push_back({ d1 + m_point, norm(n), m_color });
+			m_vertices.push_back({ d1 + m_point, norm(n), vec4 { 0.f, 1.f, 0.f, 0.f } });
 			auto id2 = m_vertices.size();
-			m_vertices.push_back({ d2 + m_point, norm(n), m_color });
-			auto id3 = m_vertices.size();
-			m_vertices.push_back({ d3 + m_point, norm(n), m_color });
+			m_vertices.push_back({ d2 + m_point, norm(n), vec4 { 0.f, 0.f, 1.f, 0.f } });
 
+			m_indices.push_back(id0);
 			m_indices.push_back(id1);
-			m_indices.push_back(id0);
 			m_indices.push_back(id2);
 
-			m_indices.push_back(id2);
+			id2 = m_vertices.size();
+			m_vertices.push_back({ d2 + m_point, norm(n), vec4 { 1.f, 0.f, 1.f, 0.f } });
+			id0 = m_vertices.size();
+			m_vertices.push_back({ d0 + m_point, norm(n), vec4{ 0.0f, 1.f, 0.f, 0.f } });
+			auto id3 = m_vertices.size();
+			m_vertices.push_back({ d3 + m_point, norm(n), vec4 { 0.f, 0.f, 1.f, 0.f } });
+
 			m_indices.push_back(id0);
+			m_indices.push_back(id2);
 			m_indices.push_back(id3);
 		}
 	}
@@ -402,11 +429,68 @@ struct constants
 {
 	mat4 cam;
 	vec4 light;
+	float f;
 };
 
 size_t round_up(size_t size)
 {
 	return (size + 15) / 16 * 16;
+}
+
+const char *layout = R"(
+9999999999
+9........9
+9.31.....9
+9.2......9
+9.....2..9
+9....23..9
+9...234529
+9....21..9
+9........9
+9.2....2.9
+56781....8
+4..932.3.7
+3..8...2.6
+2..76432.5
+1.1.X....4
+...1.2....
+)";
+
+template<typename Out>
+void generate_cubes(Out out, d3d_device &device)
+{
+	std::string_view l{ layout };
+	int x = 0;
+	int y = 0;
+	for (auto c : l)
+	{
+		if (c >= '0' && c <= '9')
+		{
+			for (int i = 0; i < c - '0'; ++i)
+			{
+				int z = i - 1;
+				vec4 p{ float(x), float(z), float(y), 1.f };
+				*out++ = cube_mesh{ device, p, 1 };
+			}
+			++x;
+		}
+		else if (c == '.')
+		{
+			++x;
+		}
+		else if (c == 'X')
+		{
+			player1.position.x() = x;
+			player1.position.z() = y;
+			player1.dir = 3.14159;
+			++x;
+		}
+		else if (c == '\n')
+		{
+			x = 0;
+			++y;
+		}
+	}
 }
 
 int main()
@@ -454,9 +538,9 @@ int main()
 	device->CreateDepthStencilView(depthBuffer, nullptr, &depthBufferView);
 
 	D3D11_DEPTH_STENCIL_DESC depthStencilDesc{};
-	depthStencilDesc.DepthEnable = FALSE;
+	depthStencilDesc.DepthEnable = TRUE;
 	depthStencilDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-	depthStencilDesc.DepthFunc = D3D11_COMPARISON_GREATER;
+	depthStencilDesc.DepthFunc = D3D11_COMPARISON_LESS;
 	CComPtr<ID3D11DepthStencilState> depthStencilState;
 	device->CreateDepthStencilState(&depthStencilDesc, &depthStencilState);
 
@@ -469,11 +553,12 @@ int main()
 	CComPtr<ID3D11SamplerState> samplerState;
 	device->CreateSamplerState(&samplerDesc, &samplerState);
 
-	D3D11_RASTERIZER_DESC1 rasterizedDesc{};
-	rasterizedDesc.FillMode = D3D11_FILL_SOLID;
-	rasterizedDesc.CullMode = D3D11_CULL_BACK;
+	D3D11_RASTERIZER_DESC1 rasterizerDesc{};
+	rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+	rasterizerDesc.CullMode = D3D11_CULL_BACK;
+	rasterizerDesc.MultisampleEnable = TRUE;
 	CComPtr<ID3D11RasterizerState1> rasterizerState;
-	device->CreateRasterizerState1(&rasterizedDesc, &rasterizerState);
+	device->CreateRasterizerState1(&rasterizerDesc, &rasterizerState);
 
 	auto v_shader = create_vertex_shader(L"VertexShader.cso", device.device);
 	auto p_shader = create_pixel_shader(L"PixelShader.cso", device.device);
@@ -482,7 +567,7 @@ int main()
 	{
 		D3D11_INPUT_ELEMENT_DESC { "SV_Position", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		D3D11_INPUT_ELEMENT_DESC { "NORMAL", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-		D3D11_INPUT_ELEMENT_DESC { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		D3D11_INPUT_ELEMENT_DESC { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 	};
 	CComPtr<ID3D11InputLayout> inputLayout;
 	device->CreateInputLayout(inputElementDesc.data(), inputElementDesc.size(), v_shader.data.data(), v_shader.data.size(), &inputLayout);
@@ -490,16 +575,7 @@ int main()
 	D3D11_VIEWPORT viewport{ (depthBufferDesc.Width - depthBufferDesc.Height) / 2.0, 0, depthBufferDesc.Height, depthBufferDesc.Height, 0, 1};
 
 	std::vector<cube_mesh> cubes;
-
-	//int n = 7;
-	//for (int k = 0; k < n; ++k)
-	//for (int i = 0; i < n; ++i)
-	//{
-	//	cube_mesh c0{ device, vec4 { -5.f + i / float(n) * 10, 0.f, -5.f + k / float(n) * 10, 1 }, 4.f / n };
-	//	cubes.push_back(std::move(c0));
-	//}	
-	cube_mesh c0{ device, vec4 { 0.f, 0.f, 20.f, 1.f }, 0.9f };
-	cubes.push_back(std::move(c0));
+	generate_cubes(std::back_inserter(cubes), device);
 
 	double alpha = 0;
 	auto rot1 = [](float alpha) {
@@ -512,6 +588,23 @@ int main()
 		return rot;
 	};
 
+	auto deviceContext = device.deviceContext.p;
+	deviceContext->IASetInputLayout(inputLayout);
+
+	deviceContext->VSSetShader(v_shader.shader, nullptr, 0);
+	deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.p);
+
+	deviceContext->RSSetViewports(1, &viewport);
+	deviceContext->RSSetState(rasterizerState);
+
+	deviceContext->PSSetShader(p_shader.shader, nullptr, 0);
+	deviceContext->PSSetSamplers(0, 1, &samplerState.p);
+	deviceContext->PSSetConstantBuffers(0, 1, &constantBuffer.p);
+
+	deviceContext->OMSetRenderTargets(1, &frameBufferView.p, depthBufferView);
+	deviceContext->OMSetDepthStencilState(depthStencilState, 0);
+	deviceContext->OMSetBlendState(nullptr, nullptr, -1);
+
 	for (;;)
 	{
 		MSG msg;
@@ -521,40 +614,29 @@ int main()
 		else
 			break;
 
-		auto deviceContext = device.deviceContext.p;
 
-		D3D11_MAPPED_SUBRESOURCE mappedSubresource;
-		deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubresource);
-		auto cnst = reinterpret_cast<constants*>(mappedSubresource.pData);
-		//cnst->light = rot1(alpha) * vec4 { 1.f, 0.f, 0.f, 0.f };
-		cnst->cam = player1.cam().matrix();
-		deviceContext->Unmap(constantBuffer, 0);
+		if (draw)
+		{
+			D3D11_MAPPED_SUBRESOURCE mappedSubresource;
+			deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubresource);
+			auto cnst = reinterpret_cast<constants*>(mappedSubresource.pData);
+			cnst->f = player1.f;
+			cnst->light = vec4{ -1.f, 0.f, 0.f, 0.f };
+			cnst->cam = player1.cam().matrix();
+			deviceContext->Unmap(constantBuffer, 0);
 
-		deviceContext->ClearRenderTargetView(frameBufferView, (std::array<float, 4> { 0.1, 0.2, 0.2, 1.0 }).data());
-		deviceContext->ClearDepthStencilView(depthBufferView, D3D11_CLEAR_DEPTH, 0.f, 0);
+			deviceContext->ClearRenderTargetView(frameBufferView, (std::array<float, 4> { 0.1, 0.2, 0.2, 1.0 }).data());
+			deviceContext->ClearDepthStencilView(depthBufferView, D3D11_CLEAR_DEPTH, 1.f, 0);
 
-		deviceContext->IASetInputLayout(inputLayout);
 
-		deviceContext->VSSetShader(v_shader.shader, nullptr, 0);
-		deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.p);
+			for (auto& cube : cubes)
+				cube.draw();
 
-		deviceContext->RSSetViewports(1, &viewport);
-		deviceContext->RSSetState(rasterizerState);
+			swapChain->Present(1, 0);
 
-		deviceContext->PSSetShader(p_shader.shader, nullptr, 0);
-		deviceContext->PSSetSamplers(0, 1, &samplerState.p);
-		deviceContext->PSSetConstantBuffers(0, 1, &constantBuffer.p);
-
-		deviceContext->OMSetRenderTargets(1, &frameBufferView.p, depthBufferView);
-		deviceContext->OMSetDepthStencilState(depthStencilState, 0);
-		deviceContext->OMSetBlendState(nullptr, nullptr, -1);
-
-		for(auto &cube : cubes)
-			cube.draw();
-
-		swapChain->Present(1, 0);
-
-		alpha += 0.01;
+			alpha += 0.01;
+			draw = false;
+		}
 	}
 
 }

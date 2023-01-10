@@ -47,13 +47,13 @@ vs_output main(vs_input input, uint id : SV_VertexID)
     {
         1, 0, 0, 0,
         0, 1, 0, 0,
-        0, 0, 1, 0,
+        0, 0, 1, -.2f,
         0, 0, 1, 0
     };
 
     v.position = mul(camera, input.position);
     v.position = mul(prj, v.position);
     v.normal = input.normal;
-    v.color = input.color;
+    v.tex = input.tex;
 	return v;
 }
