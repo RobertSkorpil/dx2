@@ -7,7 +7,7 @@ struct vs_input
 
 struct vs_output
 {
-	float4 position : SV_POSITION;
+    float4 position : SV_POSITION;
     float4 normal : NORMAL;
     float4 tex : TEXCOORD;
 };
@@ -15,6 +15,7 @@ struct vs_output
 cbuffer constants : register(b0)
 {
     float4x4 camera;
+    float4x4 world;
     float4 light;
     float ff;
 }

@@ -12,10 +12,12 @@
 #include <vector>
 #include <stdexcept>
 #include <random>
-
+#include <chrono>
 #include <iostream>
 
 #include <Eigen/Dense>
+
+using namespace std::literals;
 
 using vec3 = Eigen::Vector3f;
 using vec4 = Eigen::Vector4f;
@@ -28,22 +30,35 @@ struct camera
 	vec3 look_at{ 0.f, 0.f, 0.f };
 	vec3 up{ 0.0f, 1.0f, 0.0f };
 
-	mat4 matrix()
+	mat4 matrix_world()
 	{
 		vec3 forward = (look_at - position).normalized();
 		vec3 right = forward.cross(up).normalized();
 
-		float f = 20;
-		float n = 3;
-
-		mat4 M, P;
+		mat4 M;
 		M <<
 			right.x(), up.x(), forward.x(), position.x(),
 			right.y(), up.y(), forward.y(), position.y(),
 			right.z(), up.z(), forward.z(), position.z(),
 			0, 0, 0, 1;
+		return M.inverse().eval();
+	}
 
-		M = M.inverse().eval();
+	mat4 matrix()
+	{
+		float f = 100.f;
+		float n = .1f;
+
+		mat4 P;
+
+        P <<
+			1, 0, 0, 0,
+			0, 1, 0, 0,
+			0, 0, f / (f - n), n * f / (n - f),
+			0, 0, 1, 0
+		;
+
+		auto M = P * matrix_world();
 
 		vec4 t = M * vec4{ 0.f, 0.f, 0.f, 1.f };
 
@@ -132,10 +147,11 @@ void handle_key(WPARAM virtual_key, bool up)
 	}
 }
 
+int timer = 0;
 bool draw = false;
 LRESULT windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-	static int timer = 0;
+	static int nt = 0;
 	switch (msg)
 	{
 	case WM_CLOSE:
@@ -143,9 +159,7 @@ LRESULT windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 		return 0;
 	case WM_TIMER:
 		draw = true;
-		std::cout << "Timer " << timer++ << "\n";
-		player1.step();
-		SetTimer(hwnd, 1, 20, nullptr);
+		std::cout << "Timer " << nt++ << "\n";
 		return 0;
 	case WM_KEYDOWN:
 		handle_key(wparam, false);
@@ -209,9 +223,9 @@ pixel_shader create_pixel_shader(std::wstring_view file, ID3D11Device *device)
 
 struct vertex_data
 {
-	vec4 position;
-	vec4 normal;
-	vec4 tex_coord;
+	vec4 position{};
+	vec4 normal{};
+	vec4 tex_coord{};
 };
 
 struct d3d_device
@@ -227,7 +241,7 @@ struct d3d_device
 	d3d_device()
 	{
 		D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
+		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
 		device = baseDevice;
 		deviceContext = baseDeviceContext;
 		dxgiDevice = device;
@@ -317,29 +331,165 @@ struct mesh
 	}
 };
 
-/*
-struct circle_mesh : mesh
+struct sphere_mesh : mesh
 {
 	using mesh::mesh;
 
+	std::minstd_rand m_rand;
+
+	size_t add_vertex(vec3 p)	
+	{
+		p = p.normalized();
+		m_vertices.push_back({ p.homogeneous(), { p.x(), p.y(), p.z(), 0.f} });
+		return m_vertices.size() - 1;
+	}
+
+	void add_triangle(size_t i0, size_t i1, size_t i2, int level = 0)
+	{
+		if (level == 4)
+		{
+			m_indices.push_back(i1);
+			m_indices.push_back(i0);
+			m_indices.push_back(i2);
+		}
+		else
+		{
+			auto interpolate = [this](size_t a, size_t b)
+			{
+				return ((m_vertices[a].position + m_vertices[b].position) / 2).hnormalized();
+			};
+
+			auto i01 = add_vertex(interpolate(i0, i1));
+			auto i12 = add_vertex(interpolate(i1, i2));
+			auto i20 = add_vertex(interpolate(i2, i0));
+
+			add_triangle(i0, i20, i01, level + 1);
+			add_triangle(i1, i01, i12, level + 1);
+			add_triangle(i2, i12, i20, level + 1);
+			add_triangle(i01, i20, i12, level + 1);
+		}
+	}
+
 	void generate() override
 	{
-		const int n = 12;
-		m_vertices.emplace_back(0, 0, 0, 1);
-		for (int i = 0; i < n; ++i)
-		{
-			double a = 2 * 3.1415927 / double(n) * double(i);
-			m_vertices.emplace_back(sin(a), cos(a), 0, 1);
+		float phi = (1.0f + sqrt(5.0f)) * 0.5f;
+		float a = 1.0f;
+		float b = 1.0f / phi;
 
-			if (i & 1)
-			{
-				m_indices.push_back(0);
-				m_indices.push_back(i + 1);
-				m_indices.push_back((i + 2) % n);
-			}
-		}	
+		auto v1 = add_vertex(vec3{0, b, -a}.normalized());
+		auto v2 = add_vertex(vec3{b, a, 0}.normalized());
+		auto v3 = add_vertex(vec3{-b, a, 0}.normalized());
+		auto v4 = add_vertex(vec3{0, b, a}.normalized());
+		auto v5 = add_vertex(vec3{0, -b, a}.normalized());
+		auto v6 = add_vertex(vec3{-a, 0, b}.normalized());
+		auto v7 = add_vertex(vec3{0, -b, -a}.normalized());
+		auto v8 = add_vertex(vec3{a, 0, -b}.normalized());
+		auto v9 = add_vertex(vec3{a, 0, b}.normalized());
+		auto v10 = add_vertex(vec3{-a, 0, -b}.normalized());
+		auto v11 = add_vertex(vec3{b, -a, 0}.normalized());
+		auto v12 = add_vertex(vec3{-b, -a, 0}.normalized());
+
+		add_triangle(v3, v2, v1);
+		add_triangle(v2, v3, v4);
+		add_triangle(v6, v5, v4);
+		add_triangle(v5, v9, v4);
+		add_triangle(v8, v7, v1);
+		add_triangle(v7, v10, v1);
+		add_triangle(v12, v11, v5);
+		add_triangle(v11, v12, v7);
+		add_triangle(v10, v6, v3);
+		add_triangle(v6, v10, v12);
+		add_triangle(v9, v8, v2);
+		add_triangle(v8, v9, v11);
+		add_triangle(v3, v6, v4);
+		add_triangle(v9, v2, v4);
+		add_triangle(v10, v3, v1);
+		add_triangle(v2, v8, v1);
+		add_triangle(v12, v10, v7);
+		add_triangle(v8, v11, v7);
+		add_triangle(v6, v12, v5);
+		add_triangle(v11, v9, v5);
 	}
-};	   */
+};
+
+struct tree_mesh : mesh
+{
+	std::minstd_rand m_rand;
+	vec3 m_o;
+
+	D3D_PRIMITIVE_TOPOLOGY topology() const { return D3D11_PRIMITIVE_TOPOLOGY_LINELIST; }
+
+	tree_mesh(d3d_device& device, vec4 origin)
+		: mesh{ device }, m_rand{ std::random_device{}() }, m_o{ origin.hnormalized() }
+	{}
+
+	void add_line(vec3 a, vec3 b)
+	{
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ a.homogeneous() });
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ b.homogeneous() });
+	}
+
+	struct state
+	{
+		vec3 o = { 0, 0, 0 };
+		vec3 dir = { 0, 1, 0 };
+		float strength = .2;
+		int depth = 0;
+	};
+
+	mat3 rot(double a, double b) const
+	{
+		mat3 r;
+		r <<
+			cosf(a), 0, -sinf(a),
+			0, 1, 0,
+			sinf(a), 0, cosf(a);
+
+		mat3 r2;
+		r2 <<
+			1, 0, 0,
+			0, cosf(b), -sinf(b),
+			0, sinf(b), cosf(b);
+		return r * r2;
+	}
+
+	void gen(state s)
+	{
+		using nd = std::normal_distribution<double>;
+		if (s.strength < 0.05 || s.depth > 12)
+			return;
+
+		auto o2 = s.o + s.dir * s.strength;
+		add_line(s.o, o2);
+		auto s_1 = s;
+		auto s_2 = s;
+		
+		s_1.depth = s.depth + 1;
+		s_2.depth = s.depth + 1;
+
+		s_1.o = o2;
+		s_2.o = o2;
+
+		s_1.strength = s.strength * nd{ 0.8, 0.3 }(m_rand);
+		s_2.strength = s.strength * nd{ 0.8, 0.2 }(m_rand);
+
+		nd adist{ 0.0, 1.2 };
+		s_1.dir = (rot(adist(m_rand), adist(m_rand)) * s.dir + vec3{ 0, .7, 0 }).normalized();
+		s_2.dir = (rot(adist(m_rand), adist(m_rand)) * s.dir + vec3{ 0, .7, 0 }).normalized();
+
+		gen(s_1);
+		gen(s_2);
+	}
+
+	void generate() override
+	{
+		state s;
+		s.o = m_o;
+		gen(s);
+	}
+};
 
 struct cube_mesh : mesh
 {
@@ -377,8 +527,7 @@ struct cube_mesh : mesh
 
 		auto norm = [](vec4 v)
 		{
-			vec4 origin = { 0.f, 0.f, 0.f, 1.f };
-			return (v - origin).normalized() + origin;
+			return v.normalized();
 		};
 
 		vec4 normal{ m_scale / 2, 0.f, 0.f, 0.f };
@@ -428,6 +577,7 @@ struct cube_mesh : mesh
 struct constants
 {
 	mat4 cam;
+	mat4 world;
 	vec4 light;
 	float f;
 };
@@ -439,18 +589,18 @@ size_t round_up(size_t size)
 
 const char *layout = R"(
 9999999999
-9........9
+9.....T..9
 9.31.....9
-9.2......9
-9.....2..9
-9....23..9
-9...234529
-9....21..9
-9........9
-9.2....2.9
-56781....8
+9.2..T...9
+9.T...2..9
+9T...23..9
+9T..234529
+9T...21..9
+9T.....T.9
+9.2.T..2.9
+56781T...8
 4..932.3.7
-3..8...2.6
+3.T8...2.6
 2..76432.5
 1.1.X....4
 ...1.2....
@@ -470,9 +620,14 @@ void generate_cubes(Out out, d3d_device &device)
 			{
 				int z = i - 1;
 				vec4 p{ float(x), float(z), float(y), 1.f };
-				*out++ = cube_mesh{ device, p, 1 };
+				*out++ = std::make_unique<cube_mesh>(device, p, 1);
 			}
 			++x;
+		}
+		else if (c == 'T')
+		{
+			vec4 p{ float(x), float(-1.5), float(y), 1.f };
+			*out++ = std::make_unique<tree_mesh>(device, p);
 		}
 		else if (c == '.')
 		{
@@ -565,7 +720,7 @@ int main()
 
 	std::array<D3D11_INPUT_ELEMENT_DESC, 3> inputElementDesc
 	{
-		D3D11_INPUT_ELEMENT_DESC { "SV_Position", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		D3D11_INPUT_ELEMENT_DESC { "SV_POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		D3D11_INPUT_ELEMENT_DESC { "NORMAL", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		D3D11_INPUT_ELEMENT_DESC { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 	};
@@ -574,8 +729,9 @@ int main()
 
 	D3D11_VIEWPORT viewport{ (depthBufferDesc.Width - depthBufferDesc.Height) / 2.0, 0, depthBufferDesc.Height, depthBufferDesc.Height, 0, 1};
 
-	std::vector<cube_mesh> cubes;
-	generate_cubes(std::back_inserter(cubes), device);
+	std::vector<std::unique_ptr<mesh>> meshes;
+	//generate_cubes(std::back_inserter(meshes), device);
+	meshes.push_back(std::make_unique<sphere_mesh>(device));
 
 	double alpha = 0;
 	auto rot1 = [](float alpha) {
@@ -605,6 +761,9 @@ int main()
 	deviceContext->OMSetDepthStencilState(depthStencilState, 0);
 	deviceContext->OMSetBlendState(nullptr, nullptr, -1);
 
+	auto t = std::chrono::system_clock::now();
+	auto t2 = t;
+
 	for (;;)
 	{
 		MSG msg;
@@ -614,14 +773,23 @@ int main()
 		else
 			break;
 
+		t = std::chrono::system_clock::now();
+		if (t - t2 > 10ms)
+		{
+			draw = true;
+			SetTimer(hwnd, 1, 10, nullptr);
+		}
 
 		if (draw)
 		{
+			player1.step();
+			t2 = t;
 			D3D11_MAPPED_SUBRESOURCE mappedSubresource;
 			deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubresource);
 			auto cnst = reinterpret_cast<constants*>(mappedSubresource.pData);
 			cnst->f = player1.f;
-			cnst->light = vec4{ -1.f, 0.f, 0.f, 0.f };
+			cnst->light = vec4{-.3f, -.5f, 1.f, 0.f }.normalized();
+			cnst->world = player1.cam().matrix_world();
 			cnst->cam = player1.cam().matrix();
 			deviceContext->Unmap(constantBuffer, 0);
 
@@ -629,8 +797,8 @@ int main()
 			deviceContext->ClearDepthStencilView(depthBufferView, D3D11_CLEAR_DEPTH, 1.f, 0);
 
 
-			for (auto& cube : cubes)
-				cube.draw();
+			for (auto& m : meshes)
+				m->draw();
 
 			swapChain->Present(1, 0);
 

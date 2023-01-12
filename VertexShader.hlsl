@@ -37,22 +37,10 @@ float4 cabinet(float4 pos)
     return mul(prj, pos);
 }
 
-vs_output main(vs_input input, uint id : SV_VertexID)
+vs_output main(vs_input input)
 {
 	vs_output v;
-    float s = 0.2;
-    float f = 20;
-    float n = 1;
-    float4x4 prj =
-    {
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, -.2f,
-        0, 0, 1, 0
-    };
-
     v.position = mul(camera, input.position);
-    v.position = mul(prj, v.position);
     v.normal = input.normal;
     v.tex = input.tex;
 	return v;
