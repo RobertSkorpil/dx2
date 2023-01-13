@@ -1,6 +1,12 @@
 #pragma comment(lib, "user32")
 #pragma comment(lib, "d3d11")
 #pragma comment(lib, "d3dcompiler")
+#pragma comment(lib, "pmp")
+#define NOMINMAX
+#define WNI32_LEAN_AND_MEAN
+#ifndef M_PI
+#define M_PI 3.14159265359
+#endif
 #include <Windows.h>
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
@@ -14,8 +20,11 @@
 #include <random>
 #include <chrono>
 #include <iostream>
-
 #include <Eigen/Dense>
+#include <pmp/algorithms/Shapes.h>
+#include <pmp/algorithms/Remeshing.h>
+#include <pmp/algorithms/Triangulation.h>
+#include <pmp/algorithms/Normals.h>
 
 using namespace std::literals;
 
@@ -241,7 +250,7 @@ struct d3d_device
 	d3d_device()
 	{
 		D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
+		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
 		device = baseDevice;
 		deviceContext = baseDeviceContext;
 		dxgiDevice = device;
@@ -299,6 +308,9 @@ struct mesh
 	{
 		if (!m_generated)
 		{
+			m_generated = true;
+			m_vertexBuffer.Release();
+			m_indexBuffer.Release();
 			generate();
 
 			D3D11_BUFFER_DESC vertexBufferDesc{};
@@ -314,8 +326,6 @@ struct mesh
 			indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
 			D3D11_SUBRESOURCE_DATA indexData = { m_indices.data() };
 			m_device->CreateBuffer(&indexBufferDesc, &indexData, &m_indexBuffer);
-
-			m_generated = true;
 		}
 
 		auto deviceContext = m_device.deviceContext.p;
@@ -340,6 +350,9 @@ struct sphere_mesh : mesh
 	size_t add_vertex(vec3 p)	
 	{
 		p = p.normalized();
+
+		p *= std::normal_distribution{ 1.0, 0.01 }(m_rand);
+
 		m_vertices.push_back({ p.homogeneous(), { p.x(), p.y(), p.z(), 0.f} });
 		return m_vertices.size() - 1;
 	}
@@ -488,6 +501,46 @@ struct tree_mesh : mesh
 		state s;
 		s.o = m_o;
 		gen(s);
+	}
+};
+
+struct pmp_mesh : mesh
+{
+	pmp::SurfaceMesh& m;
+	std::unique_ptr<pmp::SurfaceMesh> m_p;
+
+	pmp_mesh(d3d_device& device, pmp::SurfaceMesh& m)
+		: mesh{ device }, m{ m }
+	{}
+
+	pmp_mesh(d3d_device& device, std::unique_ptr<pmp::SurfaceMesh> &&m)
+		: mesh{ device }, m{ *m.get() }, m_p{ std::move(m) }
+	{}
+
+	void generate() override
+	{
+		m_generated = false;
+		m_vertices.clear();
+		m_indices.clear();
+		pmp::Triangulation t(m);
+		t.triangulate();
+
+		auto pos = m.get_vertex_property<pmp::Point>("v:point");
+		for (auto v : m.vertices())
+		{
+			auto p = (vec3)pos[v];
+			auto normal = (vec3)pmp::Normals::compute_vertex_normal(m, v);
+			m_vertices.push_back({ p.homogeneous(), { normal.x(), normal.y(), normal.z(), 0 } });
+		}
+
+		for (auto f = m.faces_begin(); f != m.faces_end(); ++f)
+		{
+			const auto& face = *f;
+			auto circulator = m.vertices(face);
+			auto firstIx = m_indices.size();
+			std::transform(circulator.begin(), circulator.end(), std::back_inserter(m_indices), [](const pmp::Vertex &v) { return v.idx(); });
+			std::reverse(m_indices.begin() + firstIx, m_indices.end());
+		}
 	}
 };
 
@@ -731,7 +784,12 @@ int main()
 
 	std::vector<std::unique_ptr<mesh>> meshes;
 	//generate_cubes(std::back_inserter(meshes), device);
-	meshes.push_back(std::make_unique<sphere_mesh>(device));
+
+	auto sphere = std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::icosphere(2));
+	auto pos = sphere->get_vertex_property<pmp::Point>("v:point");
+
+//	meshes.push_back(std::make_unique<pmp_mesh>(device, *sphere.get()));
+	meshes.push_back(std::make_unique<pmp_mesh>(device, std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::torus())));
 
 	double alpha = 0;
 	auto rot1 = [](float alpha) {
@@ -764,6 +822,7 @@ int main()
 	auto t = std::chrono::system_clock::now();
 	auto t2 = t;
 
+	std::minstd_rand rand;
 	for (;;)
 	{
 		MSG msg;
@@ -782,6 +841,13 @@ int main()
 
 		if (draw)
 		{
+			std::normal_distribution dist{ 1.0, 0.005 };
+			for (auto v : sphere->vertices())
+			{
+				vec3 p = pos[v];
+				pos[v] *= dist(rand);
+			}
+
 			player1.step();
 			t2 = t;
 			D3D11_MAPPED_SUBRESOURCE mappedSubresource;
