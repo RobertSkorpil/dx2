@@ -309,10 +309,10 @@ struct mesh
 	{ 
 		if (!m_generated)
 		{
-			m_generated = true;
 			m_vertexBuffer.Release();
 			m_indexBuffer.Release();
 			generate();
+			m_generated = true;
 
 			D3D11_BUFFER_DESC vertexBufferDesc{};
 			vertexBufferDesc.ByteWidth = m_vertices.size() * sizeof(m_vertices[0]);
@@ -347,8 +347,11 @@ struct mesh
 		m_device.deviceContext->Unmap(m_vertexBuffer, 0);
 	}
 
-	void draw()
+	void draw(int pass)
 	{
+		if (pass == 1 && topology() != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
+			return;
+
 		createBuffers();
 
 		auto deviceContext = m_device.deviceContext.p;
@@ -591,6 +594,26 @@ struct coord_mesh : mesh
 	}
 };
 
+struct line_mesh : mesh
+{
+	vec4 m_a;
+	vec4 m_b;
+
+	D3D_PRIMITIVE_TOPOLOGY topology() const { return D3D11_PRIMITIVE_TOPOLOGY_LINELIST; }
+	line_mesh(d3d_device& device, vec4 a, vec4 b)
+		: mesh(device), m_a{ a }, m_b{ b }
+	{
+	}
+
+	void generate() override
+	{
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ m_a, {}, {}, {}, 1 });
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ m_b, {}, {}, {}, 1 });
+	}
+};
+
 struct cube_mesh : mesh
 {
 	vec4 m_point;
@@ -606,6 +629,8 @@ struct cube_mesh : mesh
 	
 	void generate() override
 	{
+		if (m_generated)
+			return;
 		auto rot1 = [](float α) {
 			mat4 rot;
 			rot <<
@@ -791,8 +816,8 @@ int main()
 
 	D3D11_TEXTURE2D_DESC shadowMapDesc;
 	frameBuffer->GetDesc(&shadowMapDesc);
-//	shadowMapDesc.Width *= 8;
-//	shadowMapDesc.Height *= 8;
+	shadowMapDesc.Width = 4 * 600;
+	shadowMapDesc.Height = 4 * 600;
 	shadowMapDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
 	shadowMapDesc.Usage = D3D11_USAGE_DEFAULT;
 	shadowMapDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
@@ -842,6 +867,13 @@ int main()
 	CComPtr<ID3D11SamplerState> samplerState;
 	device->CreateSamplerState(&samplerDesc, &samplerState);
 
+	D3D11_RASTERIZER_DESC1 shadowMapRasterizerDesc{};
+	shadowMapRasterizerDesc.FillMode = D3D11_FILL_SOLID;
+	shadowMapRasterizerDesc.CullMode = D3D11_CULL_FRONT;
+	shadowMapRasterizerDesc.MultisampleEnable = TRUE;
+	CComPtr<ID3D11RasterizerState1> shadowMapRasterizerState;
+	device->CreateRasterizerState1(&shadowMapRasterizerDesc, &shadowMapRasterizerState);
+
 	D3D11_RASTERIZER_DESC1 rasterizerDesc{};
 	rasterizerDesc.FillMode = D3D11_FILL_SOLID;
 	rasterizerDesc.CullMode = D3D11_CULL_BACK;
@@ -866,18 +898,24 @@ int main()
 	CComPtr<ID3D11InputLayout> inputLayout;
 	device->CreateInputLayout(inputElementDesc.data(), inputElementDesc.size(), v_shader.data.data(), v_shader.data.size(), &inputLayout);
 
-	D3D11_VIEWPORT shadowViewport{ 0, 0, shadowMapDesc.Height, shadowMapDesc.Height, 0, 1};
-	D3D11_VIEWPORT viewport{ 0, 0, depthBufferDesc.Height, depthBufferDesc.Height, 0, 1};
+	D3D11_VIEWPORT shadowViewport{ 0, 0, 4 * 600, 4 * 600, 0, 1};
+	D3D11_VIEWPORT viewport{ 0, 0, 600, 600, 0, 1};
 
 	std::vector<std::unique_ptr<mesh>> meshes;
-	//generate_cubes(std::back_inserter(meshes), device);
+	generate_cubes(std::back_inserter(meshes), device);
 
-//	meshes.push_back(std::make_unique<pmp_mesh>(device, std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::torus())));
-	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 10.f, 1.0f }, 10));
-	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 0.f, 1.0f }, 2, vec4{ .2f, .9f, .4f, 1.f }));
-	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 3.f, 0.f, 0.f, 1.0f }, 1, vec4{ .2f, .9f, .4f, 1.f }));
+// meshes.push_back(std::make_unique<pmp_mesh>(device, std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::torus())));
+//	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 0.f, 1.0f }, 2, vec4{ .2f, .9f, .4f, 1.f }));
+//	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 10.f, 1.0f }, 10));
+//	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 0.f, 1.0f }, 1, vec4{ .2f, .9f, .4f, 1.f }));
 
-//	auto torus = meshes[0].get();
+	auto torus = meshes[0].get();
+  camera light;
+  light.position = vec3{ 0, 0, 60.f };
+//	auto cube = meshes[1].get();
+//	cube->generate();
+//	for (auto& v : cube->m_vertices)
+//		meshes.push_back(std::make_unique<line_mesh>(device, (light.position + 3 * (v.position.hnormalized() - light.position)).homogeneous(), light.position.homogeneous()));
 
 	double alpha = 0;
 	auto rot1 = [](float alpha) {
@@ -917,7 +955,7 @@ int main()
 			Eigen::Quaternionf q2{ Eigen::AngleAxisf { (t - ts) / 1ms / 300.0f, vec3 {1.0f, 0.0f, 0.0f }} };
 			auto q = q1 * q2;
 			std::cout << q.w() << ", " << q.x() << ", " << q.y() << ", " << q.z() << "\n";
-	//		torus->transform(hom(q.matrix()));
+//			torus->transform(hom(q.matrix()));
 
 			player1.step();
 			t2 = t;
@@ -925,10 +963,8 @@ int main()
       auto deviceContext = device.deviceContext.p;
 
 
-			camera light;
 			auto α = (t - ts) / 1ms / 1000.0f;
-			light.position = vec3{ 0, 0, -10.f };
-			light.look_at = vec3{ sin(α), cos(α), 0 };
+			light.look_at = vec3{ 0, 0, 0 };
 			light.f = 100;
 			light.n = .1f;
 
@@ -951,7 +987,7 @@ int main()
       deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.p);
 
       deviceContext->RSSetViewports(1, &shadowViewport);
-      deviceContext->RSSetState(rasterizerState);
+      deviceContext->RSSetState(shadowMapRasterizerState);
 
 //      deviceContext->PSSetShader(shadow_p_shader.shader, nullptr, 0);
 //      deviceContext->PSSetSamplers(0, 1, &samplerState.p);
@@ -962,7 +998,7 @@ int main()
       deviceContext->OMSetBlendState(nullptr, nullptr, -1);
 
 			for (auto& m : meshes)
-				m->draw();
+				m->draw(1);
 			deviceContext->ClearState();
 #pragma endregion
 
@@ -989,7 +1025,7 @@ int main()
       deviceContext->OMSetBlendState(nullptr, nullptr, -1);
 
 			for (auto& m : meshes)
-				m->draw();
+				m->draw(2);
 
 			deviceContext->ClearState();
 #pragma endregion

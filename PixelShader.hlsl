@@ -19,6 +19,14 @@ ps_output main(vs_output v)
 {
     ps_output output;
 
+    float4x4 light_corr =
+    {
+        0.5, 0, 0, 0.5,
+        0, -0.5, 0, 0.5,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    };
+
     if(v.type == 1)
         output.color = float4(.8, .8, .8, 1.0);
     else
@@ -34,11 +42,18 @@ ps_output main(vs_output v)
 
         float spec = pow(smoothstep(0.95, 1, mul(n, s)), 12);
     
-        float4 lp = v.light_position / v.light_position.w;
-        float4 shadowDepth = shadowMap.Sample(smplr, float2(lp.x / 2 + 0.5, lp.y / 2 + 0.5));
-        float shadow = shadowDepth.r > (lp.z - 0.0001f) ? 1 : 0;
+        float4 lp = mul(light_corr, v.light_position);
+        lp /= lp.w;
+        float shadow = 0;
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                float4 shadowDepth = shadowMap.Sample(smplr, float2(lp.x + dx / 1000.0, lp.y + dy / 1000.0));
+                shadow += shadowDepth.r > (lp.z - 0.0001f) ? 1 : 0.3;
+            }
+        
 
-        output.color = shadow * (mul(v.normal, -light) * v.color + spec * float4(1, 1, 1, 1));
+        output.color = (shadow / 9) * (mul(v.normal, -light) * v.color + spec * float4(1, 1, 1, 1));
     }
 
     output.depth = v.position.z;
