@@ -1,7 +1,7 @@
 #include "common.hlsli"
 
 float4 iso(float4 pos)
-{
+{ 
     float alpha = 0.5;
     float beta = 1.2;
 	
@@ -41,7 +41,10 @@ vs_output main(vs_input input)
 {
 	vs_output v;
     v.position = mul(camera, input.position);
+    v.light_position = mul(light_mat, input.position);
     v.normal = input.normal;
     v.tex = input.tex;
+    v.color = input.color;
+    v.type = input.type;
 	return v;
 }

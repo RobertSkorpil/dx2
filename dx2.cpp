@@ -1,4 +1,4 @@
-#pragma comment(lib, "user32")
+﻿#pragma comment(lib, "user32")
 #pragma comment(lib, "d3d11")
 #pragma comment(lib, "d3dcompiler")
 #pragma comment(lib, "pmp")
@@ -38,6 +38,8 @@ struct camera
 	vec3 position{ 0.f, 0.f, 0.f };
 	vec3 look_at{ 0.f, 0.f, 0.f };
 	vec3 up{ 0.0f, 1.0f, 0.0f };
+	float n = 0.5f;
+	float f = 100.0f;
 
 	mat4 matrix_world()
 	{
@@ -55,9 +57,6 @@ struct camera
 
 	mat4 matrix()
 	{
-		float f = 100.f;
-		float n = .1f;
-
 		mat4 P;
 
         P <<
@@ -77,7 +76,7 @@ struct camera
 
 struct player
 {
-	vec3 position{ 0.0f, 0.0f, 0.0f };
+	vec3 position{ 0.f, 0.f, -2.0f };
 	float dir = 0;
 	float dir2 = 0;
 	float f = 1;
@@ -235,6 +234,8 @@ struct vertex_data
 	vec4 position{};
 	vec4 normal{};
 	vec4 tex_coord{};
+	vec4 color{ 1.f, 1.f, 1.f, 1.f };
+	uint32_t type = 0;
 };
 
 struct d3d_device
@@ -250,7 +251,7 @@ struct d3d_device
 	d3d_device()
 	{
 		D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
+		D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG | D3D11_CREATE_DEVICE_DEBUGGABLE, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
 		device = baseDevice;
 		deviceContext = baseDeviceContext;
 		dxgiDevice = device;
@@ -304,8 +305,8 @@ struct mesh
 	mesh(mesh&&) = default;
 	mesh(const mesh&) = delete;
 
-	void draw()
-	{
+	void createBuffers()
+	{ 
 		if (!m_generated)
 		{
 			m_generated = true;
@@ -315,7 +316,8 @@ struct mesh
 
 			D3D11_BUFFER_DESC vertexBufferDesc{};
 			vertexBufferDesc.ByteWidth = m_vertices.size() * sizeof(m_vertices[0]);
-			vertexBufferDesc.Usage = D3D11_USAGE_IMMUTABLE;
+			vertexBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			vertexBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
 			vertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 			D3D11_SUBRESOURCE_DATA vertexData = { m_vertices.data() };
 			m_device->CreateBuffer(&vertexBufferDesc, &vertexData, &m_vertexBuffer);
@@ -327,6 +329,27 @@ struct mesh
 			D3D11_SUBRESOURCE_DATA indexData = { m_indices.data() };
 			m_device->CreateBuffer(&indexBufferDesc, &indexData, &m_indexBuffer);
 		}
+	}
+
+	void transform(const mat4& mat)
+	{
+		createBuffers();
+
+    D3D11_MAPPED_SUBRESOURCE mappedSubresource;
+		m_device.deviceContext->Map(m_vertexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubresource);
+		for (size_t i = 0; i < m_vertices.size(); ++i)
+		{
+			auto v = reinterpret_cast<vertex_data*>(mappedSubresource.pData);
+			v[i] = m_vertices[i];
+			v[i].position = mat * m_vertices[i].position;
+			v[i].normal = mat * m_vertices[i].normal;
+		}
+		m_device.deviceContext->Unmap(m_vertexBuffer, 0);
+	}
+
+	void draw()
+	{
+		createBuffers();
 
 		auto deviceContext = m_device.deviceContext.p;
 
@@ -519,7 +542,6 @@ struct pmp_mesh : mesh
 
 	void generate() override
 	{
-		m_generated = false;
 		m_vertices.clear();
 		m_indices.clear();
 		pmp::Triangulation t(m);
@@ -544,6 +566,31 @@ struct pmp_mesh : mesh
 	}
 };
 
+struct coord_mesh : mesh
+{
+	D3D_PRIMITIVE_TOPOLOGY topology() const { return D3D11_PRIMITIVE_TOPOLOGY_LINELIST; }
+	using mesh::mesh;
+
+	void generate() override
+	{
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ vec4{-10000, 0, 0, 1}, {}, {}, {}, 1 });
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ vec4{10000, 0, 0, 1}, {}, {}, {}, 1 });
+
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ vec4{0, -10000, 0, 1}, {}, {}, {}, 1 });
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ vec4{0, 10000, 0, 1}, {}, {}, {}, 1 });
+
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ vec4{0, 0, -10000, 1}, {}, {}, {}, 1 });
+		m_indices.push_back(m_vertices.size());
+		m_vertices.push_back({ vec4{0, 0, 10000, 1}, {}, {}, {}, 1 });
+
+	}
+};
+
 struct cube_mesh : mesh
 {
 	vec4 m_point;
@@ -559,21 +606,21 @@ struct cube_mesh : mesh
 	
 	void generate() override
 	{
-		auto rot1 = [](float alpha) {
+		auto rot1 = [](float α) {
 			mat4 rot;
 			rot <<
-				cosf(alpha), sinf(alpha), 0.f, 0.f,
-				-sinf(alpha), cosf(alpha), 0.f, 0.f,
+				cosf(α), sinf(α), 0.f, 0.f,
+				-sinf(α), cosf(α), 0.f, 0.f,
 				0.f, 0.f, 1.f, 0.f,
 				0.f, 0.f, 0.f, 1.f;
 			return rot;
 		};
-		auto rot2 = [](float alpha) {
+		auto rot2 = [](float α) {
 			mat4 rot;
 			rot <<
-				cosf(alpha), 0.f, -sinf(alpha), 0.f,
+				cosf(α), 0.f, -sinf(α), 0.f,
 				0.f, 1.f, 0.f, 0.f,
-				sinf(alpha), 0.f, cosf(alpha), 0.f,
+				sinf(α), 0.f, cosf(α), 0.f,
 				0.f, 0.f, 0.f, 1.f;
 			return rot;
 		};
@@ -604,22 +651,22 @@ struct cube_mesh : mesh
 			auto d3 = rot * dir3 + n;
 
 			auto id0 = m_vertices.size();
-			m_vertices.push_back({ d0 + m_point, norm(n), vec4{ 1.0f, 1.f, 0.f, 0.f } });
+			m_vertices.push_back({ d0 + m_point, norm(n), vec4{ 1.0f, 1.f, 0.f, 0.f }, m_color });
 			auto id1 = m_vertices.size();
-			m_vertices.push_back({ d1 + m_point, norm(n), vec4 { 0.f, 1.f, 0.f, 0.f } });
+			m_vertices.push_back({ d1 + m_point, norm(n), vec4 { 0.f, 1.f, 0.f, 0.f }, m_color });
 			auto id2 = m_vertices.size();
-			m_vertices.push_back({ d2 + m_point, norm(n), vec4 { 0.f, 0.f, 1.f, 0.f } });
+			m_vertices.push_back({ d2 + m_point, norm(n), vec4 { 0.f, 0.f, 1.f, 0.f }, m_color });
 
 			m_indices.push_back(id0);
 			m_indices.push_back(id1);
 			m_indices.push_back(id2);
 
 			id2 = m_vertices.size();
-			m_vertices.push_back({ d2 + m_point, norm(n), vec4 { 1.f, 0.f, 1.f, 0.f } });
+			m_vertices.push_back({ d2 + m_point, norm(n), vec4 { 1.f, 0.f, 1.f, 0.f }, m_color });
 			id0 = m_vertices.size();
-			m_vertices.push_back({ d0 + m_point, norm(n), vec4{ 0.0f, 1.f, 0.f, 0.f } });
+			m_vertices.push_back({ d0 + m_point, norm(n), vec4{ 0.0f, 1.f, 0.f, 0.f }, m_color });
 			auto id3 = m_vertices.size();
-			m_vertices.push_back({ d3 + m_point, norm(n), vec4 { 0.f, 0.f, 1.f, 0.f } });
+			m_vertices.push_back({ d3 + m_point, norm(n), vec4 { 0.f, 0.f, 1.f, 0.f }, m_color });
 
 			m_indices.push_back(id0);
 			m_indices.push_back(id2);
@@ -631,7 +678,8 @@ struct constants
 {
 	mat4 cam;
 	mat4 world;
-	vec4 light;
+	mat4 light_camera;
+	vec3 light;
 	float f;
 };
 
@@ -701,6 +749,13 @@ void generate_cubes(Out out, d3d_device &device)
 	}
 }
 
+mat4 hom(const mat3 &mat)
+{
+	auto result = mat4::Identity().eval();
+	result.topLeftCorner(3, 3) = mat;
+	return result;
+}
+
 int main()
 {
 	camera cam;
@@ -733,6 +788,32 @@ int main()
 
 	CComPtr<ID3D11RenderTargetView> frameBufferView;
 	device->CreateRenderTargetView(frameBuffer, nullptr, &frameBufferView);
+
+	D3D11_TEXTURE2D_DESC shadowMapDesc;
+	frameBuffer->GetDesc(&shadowMapDesc);
+//	shadowMapDesc.Width *= 8;
+//	shadowMapDesc.Height *= 8;
+	shadowMapDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+	shadowMapDesc.Usage = D3D11_USAGE_DEFAULT;
+	shadowMapDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+	
+	CComPtr<ID3D11Texture2D> shadowMap;
+	device->CreateTexture2D(&shadowMapDesc, nullptr, &shadowMap);
+
+	D3D11_DEPTH_STENCIL_VIEW_DESC shadowMapDepthStencilViewDesc{};
+	shadowMapDepthStencilViewDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	shadowMapDepthStencilViewDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+
+	CComPtr<ID3D11DepthStencilView> shadowMapDepthView;
+  device->CreateDepthStencilView(shadowMap, &shadowMapDepthStencilViewDesc, &shadowMapDepthView);
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC shadowMapResourceViewDesc{};
+	shadowMapResourceViewDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+	shadowMapResourceViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	shadowMapResourceViewDesc.Texture2D.MipLevels = 1;
+
+	CComPtr<ID3D11ShaderResourceView> shadowMapResurceView;
+	device->CreateShaderResourceView(shadowMap, &shadowMapResourceViewDesc, &shadowMapResurceView);
 
 	D3D11_TEXTURE2D_DESC depthBufferDesc;
 	frameBuffer->GetDesc(&depthBufferDesc);
@@ -768,28 +849,35 @@ int main()
 	CComPtr<ID3D11RasterizerState1> rasterizerState;
 	device->CreateRasterizerState1(&rasterizerDesc, &rasterizerState);
 
+	auto shadow_v_shader = create_vertex_shader(L"ShadowVS.cso", device.device);
+	auto shadow_p_shader = create_pixel_shader(L"ShadowPS.cso", device.device);
+
 	auto v_shader = create_vertex_shader(L"VertexShader.cso", device.device);
 	auto p_shader = create_pixel_shader(L"PixelShader.cso", device.device);
 
-	std::array<D3D11_INPUT_ELEMENT_DESC, 3> inputElementDesc
+	std::array<D3D11_INPUT_ELEMENT_DESC, 5> inputElementDesc
 	{
 		D3D11_INPUT_ELEMENT_DESC { "SV_POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		D3D11_INPUT_ELEMENT_DESC { "NORMAL", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		D3D11_INPUT_ELEMENT_DESC { "TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		D3D11_INPUT_ELEMENT_DESC { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		D3D11_INPUT_ELEMENT_DESC { "TYPE", 0, DXGI_FORMAT_R32_UINT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 	};
 	CComPtr<ID3D11InputLayout> inputLayout;
 	device->CreateInputLayout(inputElementDesc.data(), inputElementDesc.size(), v_shader.data.data(), v_shader.data.size(), &inputLayout);
 
-	D3D11_VIEWPORT viewport{ (depthBufferDesc.Width - depthBufferDesc.Height) / 2.0, 0, depthBufferDesc.Height, depthBufferDesc.Height, 0, 1};
+	D3D11_VIEWPORT shadowViewport{ 0, 0, shadowMapDesc.Height, shadowMapDesc.Height, 0, 1};
+	D3D11_VIEWPORT viewport{ 0, 0, depthBufferDesc.Height, depthBufferDesc.Height, 0, 1};
 
 	std::vector<std::unique_ptr<mesh>> meshes;
 	//generate_cubes(std::back_inserter(meshes), device);
 
-	auto sphere = std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::icosphere(2));
-	auto pos = sphere->get_vertex_property<pmp::Point>("v:point");
+//	meshes.push_back(std::make_unique<pmp_mesh>(device, std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::torus())));
+	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 10.f, 1.0f }, 10));
+	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 0.f, 1.0f }, 2, vec4{ .2f, .9f, .4f, 1.f }));
+	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 3.f, 0.f, 0.f, 1.0f }, 1, vec4{ .2f, .9f, .4f, 1.f }));
 
-//	meshes.push_back(std::make_unique<pmp_mesh>(device, *sphere.get()));
-	meshes.push_back(std::make_unique<pmp_mesh>(device, std::make_unique<pmp::SurfaceMesh>(pmp::Shapes::torus())));
+//	auto torus = meshes[0].get();
 
 	double alpha = 0;
 	auto rot1 = [](float alpha) {
@@ -802,25 +890,9 @@ int main()
 		return rot;
 	};
 
-	auto deviceContext = device.deviceContext.p;
-	deviceContext->IASetInputLayout(inputLayout);
-
-	deviceContext->VSSetShader(v_shader.shader, nullptr, 0);
-	deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.p);
-
-	deviceContext->RSSetViewports(1, &viewport);
-	deviceContext->RSSetState(rasterizerState);
-
-	deviceContext->PSSetShader(p_shader.shader, nullptr, 0);
-	deviceContext->PSSetSamplers(0, 1, &samplerState.p);
-	deviceContext->PSSetConstantBuffers(0, 1, &constantBuffer.p);
-
-	deviceContext->OMSetRenderTargets(1, &frameBufferView.p, depthBufferView);
-	deviceContext->OMSetDepthStencilState(depthStencilState, 0);
-	deviceContext->OMSetBlendState(nullptr, nullptr, -1);
-
 	auto t = std::chrono::system_clock::now();
 	auto t2 = t;
+	auto ts = t;
 
 	std::minstd_rand rand;
 	for (;;)
@@ -841,30 +913,87 @@ int main()
 
 		if (draw)
 		{
-			std::normal_distribution dist{ 1.0, 0.005 };
-			for (auto v : sphere->vertices())
-			{
-				vec3 p = pos[v];
-				pos[v] *= dist(rand);
-			}
+			Eigen::Quaternionf q1{ Eigen::AngleAxisf { (t - ts) / 1ms / 1000.0f, vec3 {0.0f, 1.0f, 0.0f }} };
+			Eigen::Quaternionf q2{ Eigen::AngleAxisf { (t - ts) / 1ms / 300.0f, vec3 {1.0f, 0.0f, 0.0f }} };
+			auto q = q1 * q2;
+			std::cout << q.w() << ", " << q.x() << ", " << q.y() << ", " << q.z() << "\n";
+	//		torus->transform(hom(q.matrix()));
 
 			player1.step();
 			t2 = t;
+
+      auto deviceContext = device.deviceContext.p;
+
+
+			camera light;
+			auto α = (t - ts) / 1ms / 1000.0f;
+			light.position = vec3{ 0, 0, -10.f };
+			light.look_at = vec3{ sin(α), cos(α), 0 };
+			light.f = 100;
+			light.n = .1f;
+
 			D3D11_MAPPED_SUBRESOURCE mappedSubresource;
 			deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubresource);
 			auto cnst = reinterpret_cast<constants*>(mappedSubresource.pData);
 			cnst->f = player1.f;
-			cnst->light = vec4{-.3f, -.5f, 1.f, 0.f }.normalized();
+			cnst->light = (light.look_at - light.position).normalized();
 			cnst->world = player1.cam().matrix_world();
 			cnst->cam = player1.cam().matrix();
+			cnst->light_camera = light.matrix();
 			deviceContext->Unmap(constantBuffer, 0);
+
+#pragma region PASS 1
+			deviceContext->ClearDepthStencilView(shadowMapDepthView, D3D11_CLEAR_DEPTH, 1.f, 0);
+
+      deviceContext->IASetInputLayout(inputLayout);
+
+      deviceContext->VSSetShader(shadow_v_shader.shader, nullptr, 0);
+      deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.p);
+
+      deviceContext->RSSetViewports(1, &shadowViewport);
+      deviceContext->RSSetState(rasterizerState);
+
+//      deviceContext->PSSetShader(shadow_p_shader.shader, nullptr, 0);
+//      deviceContext->PSSetSamplers(0, 1, &samplerState.p);
+//      deviceContext->PSSetConstantBuffers(0, 1, &constantBuffer.p);
+
+      deviceContext->OMSetRenderTargets(0, nullptr, shadowMapDepthView);
+      deviceContext->OMSetDepthStencilState(depthStencilState, 0);
+      deviceContext->OMSetBlendState(nullptr, nullptr, -1);
+
+			for (auto& m : meshes)
+				m->draw();
+			deviceContext->ClearState();
+#pragma endregion
+
+#pragma region PASS 2
 
 			deviceContext->ClearRenderTargetView(frameBufferView, (std::array<float, 4> { 0.1, 0.2, 0.2, 1.0 }).data());
 			deviceContext->ClearDepthStencilView(depthBufferView, D3D11_CLEAR_DEPTH, 1.f, 0);
 
+      deviceContext->IASetInputLayout(inputLayout);
+
+      deviceContext->VSSetShader(v_shader.shader, nullptr, 0);
+      deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.p);
+
+      deviceContext->RSSetViewports(1, &viewport);
+      deviceContext->RSSetState(rasterizerState);
+
+      deviceContext->PSSetShader(p_shader.shader, nullptr, 0);
+      deviceContext->PSSetSamplers(0, 1, &samplerState.p);
+      deviceContext->PSSetConstantBuffers(0, 1, &constantBuffer.p);
+			deviceContext->PSSetShaderResources(0, 1, &shadowMapResurceView.p);
+
+      deviceContext->OMSetRenderTargets(1, &frameBufferView.p, depthBufferView);
+      deviceContext->OMSetDepthStencilState(depthStencilState, 0);
+      deviceContext->OMSetBlendState(nullptr, nullptr, -1);
 
 			for (auto& m : meshes)
 				m->draw();
+
+			deviceContext->ClearState();
+#pragma endregion
+
 
 			swapChain->Present(1, 0);
 
