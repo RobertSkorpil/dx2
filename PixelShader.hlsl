@@ -13,6 +13,7 @@ struct shadowTexel
 };
 
 Texture2D shadowMap : register(t0);
+Texture2D tex1 : register(t1);
 SamplerState smplr : register(s0);
 
 ps_output main(vs_output v)
@@ -31,13 +32,28 @@ ps_output main(vs_output v)
         output.color = float4(.8, .8, .8, 1.0);
     else
     {
+        float4 bump = tex1.Sample(smplr, v.tex);
+        float4 baseColor;
+        float4 normal;
+        
+        if(material == 0)
+        {
+            baseColor = v.color;
+            normal = v.normal;
+        }
+        else
+        {
+            baseColor = v.color * (1 - length(bump) * 0.2);
+            normal = v.normal + bump / 50.0;
+        }
+
         float b = min(v.tex.r, min(v.tex.g, v.tex.b));
 
         b = smoothstep(0.1, 0, b);
 
         float4 l = mul(world, -light);
         float4 p = normalize(float4(v.position.x / 300 - 1, v.position.y / 300 - 1, 1, 0));
-        float4 n = mul(world, v.normal);
+        float4 n = mul(world, normal);
         float4 s = normalize(-p + l);
 
         float spec = pow(smoothstep(0.95, 1, mul(n, s)), 12);
@@ -49,11 +65,10 @@ ps_output main(vs_output v)
             for (int dy = -1; dy <= 1; ++dy)
             {
                 float4 shadowDepth = shadowMap.Sample(smplr, float2(lp.x + dx / 1000.0, lp.y + dy / 1000.0));
-                shadow += shadowDepth.r > (lp.z - 0.0001f) ? 1 : 0.3;
+                shadow += shadowDepth.r > (lp.z - 0.0001f) ? 1 : 0;
             }
         
-
-        output.color = (shadow / 9) * (mul(v.normal, -light) * v.color + spec * float4(1, 1, 1, 1));
+        output.color = 0.8 * ((shadow / 9.0) * (saturate(mul(normal, -light)) * baseColor + spec * float4(1, 1, 1, 1))) + 0.2 * baseColor;
     }
 
     output.depth = v.position.z;

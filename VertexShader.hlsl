@@ -40,9 +40,9 @@ float4 cabinet(float4 pos)
 vs_output main(vs_input input)
 {
 	vs_output v;
-    v.position = mul(camera, input.position);
-    v.light_position = mul(light_mat, input.position);
-    v.normal = input.normal;
+    v.position = mul(camera, mul(object, input.position));
+    v.light_position = mul(light_mat, mul(object, input.position));
+    v.normal = normalize(mul(object, input.normal));
     v.tex = input.tex;
     v.color = input.color;
     v.type = input.type;

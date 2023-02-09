@@ -183,6 +183,9 @@
     <None Include="common.hlsli" />
     <None Include="packages.config" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="PerlinNoise.hpp" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="packages\Eigen3.3.3.9\build\native\Eigen3.targets" Condition="Exists('packages\Eigen3.3.3.9\build\native\Eigen3.targets')" />

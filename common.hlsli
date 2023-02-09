@@ -19,9 +19,10 @@ struct vs_output
 
 cbuffer constants : register(b0)
 {
+    float4x4 object;
     float4x4 camera;
     float4x4 world;
     float4x4 light_mat;
     float3 light;
-    float ff;
+    int material;
 }
