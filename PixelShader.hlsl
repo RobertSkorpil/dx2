@@ -60,6 +60,9 @@ ps_output main(vs_output v)
     
         float4 lp = mul(light_corr, v.light_position);
         lp /= lp.w;
+        if(material == 1)
+            lp += float4(bump.x, bump.y, 0, 0) / 200;
+
         float shadow = 0;
         for (int dx = -1; dx <= 1; ++dx)
             for (int dy = -1; dy <= 1; ++dy)

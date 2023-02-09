@@ -877,7 +877,7 @@ struct texture
     for (int i = 0; i < m_width; ++i)
       for (int j = 0; j < m_height; ++j)
       {
-        auto n = [&](siv::PerlinNoise& noise) { return (float)noise.noise2D(i / 50.f, j / 50.f); };
+        auto n = [&](siv::PerlinNoise& noise) { return (float)noise.noise2D(i / 20.f, j / 20.f); };
         mapping.data()[j + i * m_height] = vec4{ n(noise1), n(noise2), n(noise3), 0.0f };
       }
   }
