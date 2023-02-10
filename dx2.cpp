@@ -1,6 +1,8 @@
 ﻿#pragma comment(lib, "user32")
 #pragma comment(lib, "d3d11")
 #pragma comment(lib, "d3dcompiler")
+#pragma comment(lib, "d2d1")
+#pragma comment(lib, "dwrite")
 #pragma comment(lib, "pmp")
 #define NOMINMAX
 #define WNI32_LEAN_AND_MEAN
@@ -12,6 +14,12 @@
 #include <Windows.h>
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
+
+#include <d2d1_1.h>
+#include <d2d1_1helper.h>
+#include <dwrite_1.h>
+#include <wincodec.h>
+
 #include <comdef.h>
 #include <atlbase.h>
 #include <array>
@@ -835,7 +843,74 @@ mat4 hom(const mat3& mat)
   auto result = mat4::Identity().eval();
   result.topLeftCorner(3, 3) = mat;
   return result;
+} 
+
+std::vector<vec4> text(d3d_device& device, std::wstring_view t, unsigned int width, unsigned int height)
+{
+  CComPtr<ID2D1Factory1> factory;
+  D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), (void**)&factory.p);
+  
+  CComPtr<IDWriteFactory> writeFactory;
+  DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, __uuidof(IDWriteFactory), (IUnknown **)&writeFactory.p);
+
+  CComQIPtr<IDXGIDevice1> dxgi{ device.baseDevice };
+  CComPtr<ID2D1Device> d2device;
+  D2D1_CREATION_PROPERTIES props{};
+  props.debugLevel = D2D1_DEBUG_LEVEL_INFORMATION;
+  props.threadingMode = D2D1_THREADING_MODE_SINGLE_THREADED;
+  D2D1CreateDevice(dxgi, &props, &d2device);
+  CComPtr<ID2D1DeviceContext> d2device_context;
+  D2D1_DEVICE_CONTEXT_OPTIONS opts{};
+  d2device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2device_context);
+  auto bmProps{ D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)) };
+  CComPtr<ID2D1Bitmap1> bitmap, bitmap2;
+  d2device_context->CreateBitmap(D2D1_SIZE_U{ .width = width, .height = height }, nullptr, 0, bmProps, &bitmap);
+
+  auto bmProps2{ D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)) };
+  d2device_context->CreateBitmap(D2D1_SIZE_U{ .width = width, .height = height }, nullptr, 0, bmProps2, &bitmap2);
+
+  CComPtr<IDXGISurface> surface;
+  bitmap->GetSurface(&surface);
+  CComPtr<ID2D1RenderTarget> target;
+  auto renderTargetProps{ D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96, 96) };
+  factory->CreateDxgiSurfaceRenderTarget(surface, renderTargetProps, &target);
+
+  CComPtr<IDWriteTextFormat> textFormat;
+  writeFactory->CreateTextFormat(L"Arial", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 140, L"en-US", &textFormat);
+
+  D2D1_COLOR_F color{};
+  color.a = 0xff;
+  color.r = 0xff;
+  CComPtr<ID2D1SolidColorBrush> brush;
+  target->CreateSolidColorBrush(color, &brush);
+  target->BeginDraw();
+  target->Clear();
+  auto textRect{ D2D1::RectF(0, height / 2, width, height) };
+  target->DrawTextW(t.data(), t.length(), textFormat, textRect, brush);
+  target->EndDraw();
+
+  auto dstPoint { D2D1::Point2U() };
+  auto srcRect { D2D1::RectU(0, 0, width, height) };
+  bitmap2->CopyFromBitmap(&dstPoint, bitmap, &srcRect);
+  D2D1_MAPPED_RECT rect;
+  bitmap2->Map(D2D1_MAP_OPTIONS_READ, &rect);
+
+  std::vector<vec4> result;
+  result.resize(width * height);
+  std::transform(reinterpret_cast<uint32_t*>(rect.bits), reinterpret_cast<uint32_t*>(rect.bits) + width * height, result.begin(),
+    [](uint32_t val)
+    {
+      struct pixel { uint8_t r, g, b, a; } pix;
+      memcpy(&pix, &val, sizeof(pix));
+      return vec4{ pix.r / 255.0f, pix.g / 255.0f, pix.b / 255.0f, pix.a / 255.0f };
+    });
+
+  bitmap2->Unmap();
+
+  return result;
 }
+
+
 
 struct texture
 {
@@ -866,10 +941,40 @@ struct texture
     m_device->CreateShaderResourceView(m_texture, nullptr, &m_view);
   }
 
+  void diff(vec4* src, vec4* dst)
+  {
+    auto n{ [](int x) {return float(x == 0 ? 0 : (x > 0 ? 1 : -1)); } };
+    int span = 2;
+    std::fill_n(dst, m_width * m_height, vec4{ 0.0f, 0.0f, 0.0f, 1.0f });
+    for (int x = 3; x < m_width - 3; ++x)
+    {
+      for (int y = 3; y < m_height - 3; ++y)
+      {
+        vec4 sum{ 0.f, 0.f, 0.f, 0.f };
+        for (int dx = -span; dx <= span; ++dx)
+        {
+          for(int dy = -span; dy <= span; ++dy)
+          {
+            if (!dx && !dy)
+              continue;
+            auto dif = src[y * m_width + x].x() - src[(y + dy) * m_width + x + dx].x();
+            sum += dif / (((span * 2 + 1) * (span * 2 + 1)) - 1) * vec4{ n(dx), n(dy), 0, 0.f };
+          }
+        }
+        dst[y * m_width + x] = sum;
+      }
+    }
+  }
+
   void generate()
   {
     mapped_resource<vec4> mapping(m_device, m_texture);
 
+    auto t = text(m_device, L"Hello, World!", m_width, m_height);
+    auto t2 = t;
+    diff(t.data(), t2.data());
+    std::copy(t2.begin(), t2.end(), mapping.data());
+/*
     siv::PerlinNoise noise1{ std::random_device{} };
     siv::PerlinNoise noise2{ std::random_device{} };
     siv::PerlinNoise noise3{ std::random_device{} };
@@ -879,10 +984,9 @@ struct texture
       {
         auto n = [&](siv::PerlinNoise& noise) { return (float)noise.noise2D(i / 20.f, j / 20.f); };
         mapping.data()[j + i * m_height] = vec4{ n(noise1), n(noise2), n(noise3), 0.0f };
-      }
+      }*/
   }
 };
-
 int main()
 {
   camera cam;

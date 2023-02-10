@@ -32,7 +32,7 @@ ps_output main(vs_output v)
         output.color = float4(.8, .8, .8, 1.0);
     else
     {
-        float4 bump = tex1.Sample(smplr, v.tex);
+        float4 bump = tex1.Sample(smplr, float2(v.tex.x, 1 - v.tex.y));
         float4 baseColor;
         float4 normal;
         
@@ -44,7 +44,7 @@ ps_output main(vs_output v)
         else
         {
             baseColor = v.color * (1 - length(bump) * 0.2);
-            normal = v.normal + bump / 50.0;
+            normal = v.normal + bump / 5.0;
         }
 
         float b = min(v.tex.r, min(v.tex.g, v.tex.b));
