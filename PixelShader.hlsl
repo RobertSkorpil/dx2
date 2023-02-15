@@ -51,12 +51,12 @@ ps_output main(vs_output v)
 
         b = smoothstep(0.1, 0, b);
 
-        float4 l = mul(world, -light);
-        float4 p = normalize(float4(v.position.x / 300 - 1, v.position.y / 300 - 1, 1, 0));
-        float4 n = mul(world, normal);
-        float4 s = normalize(-p + l);
+        float4 ssp = v.position / 300 + float4(-1, -1, 0, 0);
+        float4 l = normalize(mul(world, float4(light, 0)));
+        float4 p = normalize(float4(ssp.x, ssp.y, 1, 0));
+        float4 s = -normalize(l + p);
 
-        float spec = pow(smoothstep(0.95, 1, mul(n, s)), 12);
+        float spec = pow(smoothstep(0.95, 1, mul(normal, s)), 12);
     
         float4 lp = mul(light_corr, v.light_position);
         lp /= lp.w;
@@ -68,10 +68,29 @@ ps_output main(vs_output v)
             for (int dy = -1; dy <= 1; ++dy)
             {
                 float4 shadowDepth = shadowMap.Sample(smplr, float2(lp.x + dx / 1000.0, lp.y + dy / 1000.0));
-                shadow += shadowDepth.r > (lp.z - 0.0001f) ? 1 : 0;
+                shadow += shadowDepth.r > (lp.z - 0.0001f) ? (1 / 9.0) : 0;
             }
         
-        output.color = 0.8 * ((shadow / 9.0) * (saturate(mul(normal, -light)) * baseColor + spec * float4(1, 1, 1, 1))) + 0.2 * baseColor;
+//        output.color = 0.8 * ((shadow / 9.0) * (saturate(mul(normal, -light)) * baseColor + spec * float4(1, 1, 1, 1))) + 0.2 * baseColor;
+
+        float diffuseCoeff = saturate(mul(normal, -l)) * shadow;
+//        output.color = baseColor * smoothstep(0.95, 1, diffuseCoeff);
+        output.color = saturate(baseColor * (0.2 + 0.8 * diffuseCoeff) + spec * float4(1, 1, 1, 1));
+
+        if (pow(ssp.x, 2) + pow(ssp.y, 2) < 0.03)
+            output.color = 0;
+
+        if (pow(s.x, 2) + pow(s.y, 2) < 0.01)
+            output.color = float4(1, 1, 0, 1);
+
+        if(ssp.x < -0.9)
+            output.color = float4(1, 0, 0, 1);
+        if(ssp.x > 0.9)
+            output.color = float4(0, 0, 1, 1);
+        if(ssp.y < -0.9)
+            output.color = float4(0, 1, 1, 1);
+        if(ssp.y > 0.9)
+            output.color = float4(1, 1, 0, 1);
     }
 
     output.depth = v.position.z;

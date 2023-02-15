@@ -35,6 +35,7 @@
 #include <pmp/algorithms/Remeshing.h>
 #include <pmp/algorithms/Triangulation.h>
 #include <pmp/algorithms/Normals.h>
+#include <atlcom.h>
 
 #include "PerlinNoise.hpp"
 
@@ -90,8 +91,6 @@ struct camera
 
     auto M = P * matrix_world();
 
-    vec4 t = M * vec4{ 0.f, 0.f, 0.f, 1.f };
-
     return M;
   }
 };
@@ -143,6 +142,13 @@ struct player
     dir2 += key_home * -.1f + key_end * .1f;
     vec3 velocity = rot() * vec3 { 0.f, key_pgup * .1f + key_pgdown * -.1f, key_up * .1f + key_down * -.1f };
     position += velocity;
+  }
+
+  player ahead(float distance)
+  {
+    player p = *this;
+    p.position += rot() * vec3 { 0, 0, distance };
+    return p;
   }
 } player1;
 
@@ -274,7 +280,7 @@ struct d3d_device
   d3d_device()
   {
     D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-    D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT/* | D3D11_CREATE_DEVICE_DEBUG | D3D11_CREATE_DEVICE_DEBUGGABLE*/, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
+    D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG | D3D11_CREATE_DEVICE_DEBUGGABLE, &featureLevel, 1, D3D11_SDK_VERSION, &baseDevice, nullptr, &baseDeviceContext);
     device = baseDevice;
     deviceContext = baseDeviceContext;
     dxgiDevice = device;
@@ -350,8 +356,8 @@ struct mesh
   std::vector<uint32_t> m_indices;
   CComPtr<ID3D11Buffer> m_vertexBuffer;
   CComPtr<ID3D11Buffer> m_indexBuffer;
-  bool m_generated = false;
-  int m_material = 0;
+  bool m_generated{ false };
+  int m_material{ 0 };
 
   virtual void generate() = 0;
 
@@ -437,6 +443,90 @@ struct multi_mesh : mesh
   {
     for (int i = 0; i < m_count; ++i)
       m_base.draw(pass, transform * m_transformer(i));
+  }
+};
+
+// {ACBD3E59-A56F-450D-ADC6-80E3DF9A98BE}
+static const GUID CLSID_my_renderer =
+{ 0xacbd3e59, 0xa56f, 0x450d, { 0xad, 0xc6, 0x80, 0xe3, 0xdf, 0x9a, 0x98, 0xbe } };
+
+class ATL_NO_VTABLE my_renderer : 
+  public CComObjectRoot,
+  public CComCoClass<my_renderer, &CLSID_my_renderer>,
+  public IDispatchImpl<IDWriteTextRenderer>
+{
+public:
+  BEGIN_COM_MAP(my_renderer)
+    COM_INTERFACE_ENTRY(IDWriteTextRenderer)
+  END_COM_MAP()
+
+  HRESULT IsPixelSnappingDisabled(void*, BOOL*)
+  {
+    return E_NOTIMPL;
+  }
+
+  HRESULT GetCurrentTransform(
+    void* clientDrawingContext,
+    DWRITE_MATRIX* transform
+  ) 
+  {
+    return E_NOTIMPL;
+  }
+
+  HRESULT GetPixelsPerDip(
+    void* clientDrawingContext,
+    FLOAT* pixelsPerDip
+  )
+  {
+    return E_NOTIMPL;
+  }
+
+  HRESULT DrawGlyphRun(
+    void* clientDrawingContext,
+    FLOAT                              baselineOriginX,
+    FLOAT                              baselineOriginY,
+    DWRITE_MEASURING_MODE              measuringMode,
+    DWRITE_GLYPH_RUN const* glyphRun,
+    DWRITE_GLYPH_RUN_DESCRIPTION const* glyphRunDescription,
+    IUnknown* clientDrawingEffect
+  )
+  {
+    return E_NOTIMPL;
+  }
+
+  HRESULT DrawInlineObject(
+    void* clientDrawingContext,
+    FLOAT               originX,
+    FLOAT               originY,
+    IDWriteInlineObject* inlineObject,
+    BOOL                isSideways,
+    BOOL                isRightToLeft,
+    IUnknown* clientDrawingEffect
+  )
+  {
+    return E_NOTIMPL;
+  }
+
+  HRESULT DrawStrikethrough(
+    void* clientDrawingContext,
+    FLOAT                      baselineOriginX,
+    FLOAT                      baselineOriginY,
+    DWRITE_STRIKETHROUGH const* strikethrough,
+    IUnknown* clientDrawingEffect
+  )
+  {
+    return E_NOTIMPL;
+  }
+
+  HRESULT DrawUnderline(
+    void* clientDrawingContext,
+    FLOAT                  baselineOriginX,
+    FLOAT                  baselineOriginY,
+    DWRITE_UNDERLINE const* underline,
+    IUnknown* clientDrawingEffect
+  )
+  {
+    return E_NOTIMPL;
   }
 };
 
@@ -853,6 +943,16 @@ std::vector<vec4> text(d3d_device& device, std::wstring_view t, unsigned int wid
   CComPtr<IDWriteFactory> writeFactory;
   DWriteCreateFactory(DWRITE_FACTORY_TYPE_ISOLATED, __uuidof(IDWriteFactory), (IUnknown **)&writeFactory.p);
 
+  CComPtr<IDWriteTextFormat> textFormat;
+  writeFactory->CreateTextFormat(L"Arial", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 140, L"en-US", &textFormat);
+
+  CComPtr<IDWriteTextLayout> textLayout;
+  writeFactory->CreateTextLayout(t.data(), t.size(), textFormat, 100, 100, &textLayout);
+
+  my_renderer renderer;
+//  textLayout->Draw(nullptr, 
+
+/*
   CComQIPtr<IDXGIDevice1> dxgi{ device.baseDevice };
   CComPtr<ID2D1Device> d2device;
   D2D1_CREATION_PROPERTIES props{};
@@ -907,7 +1007,7 @@ std::vector<vec4> text(d3d_device& device, std::wstring_view t, unsigned int wid
 
   bitmap2->Unmap();
 
-  return result;
+  return result;*/
 }
 
 
@@ -946,7 +1046,7 @@ struct texture
     auto n{ [](int x) {return float(x == 0 ? 0 : (x > 0 ? 1 : -1)); } };
     int span = 2;
     std::fill_n(dst, m_width * m_height, vec4{ 0.0f, 0.0f, 0.0f, 1.0f });
-    for (int x = 3; x < m_width - 3; ++x)
+/*    for (int x = 3; x < m_width - 3; ++x)
     {
       for (int y = 3; y < m_height - 3; ++y)
       {
@@ -963,7 +1063,7 @@ struct texture
         }
         dst[y * m_width + x] = sum;
       }
-    }
+    }   */
   }
 
   void generate()
@@ -1139,6 +1239,12 @@ int main()
     }
   ));
   //	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 0.f, 1.0f }, 2, vec4{ .2f, .9f, .4f, 1.f }));
+  auto pmp_cube = pmp::Shapes::hexahedron();
+  pmp::Triangulation tr(pmp_cube);
+  tr.triangulate();
+  pmp::Remeshing rem(pmp_cube);
+  rem.uniform_remeshing(0.1);
+//  meshes.push_back(std::make_unique<pmp_mesh>(device, std::make_unique<pmp::SurfaceMesh>(pmp_cube)));
   meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 10.f, 1.0f }, 10));
   meshes[1]->m_material = 1;
   //	meshes.push_back(std::make_unique<cube_mesh>(device, vec4{ 0.f, 0.f, 0.f, 1.0f }, 1, vec4{ .2f, .9f, .4f, 1.f }));
@@ -1191,10 +1297,12 @@ int main()
       light.f = 100;
       light.n = .1f;
 
+      constants0.light_camera = light.matrix();
       constants0.light = (light.look_at - light.position).normalized();
+      //constants0.light = (player1.cam().look_at - player1.cam().position).normalized();
+      //constants0.light_camera = player1.ahead(0.5).cam().matrix();
       constants0.world = player1.cam().matrix_world();
       constants0.cam = player1.cam().matrix();
-      constants0.light_camera = light.matrix();
       *mapped_resource<constants> { device, device.constantBuffer }.data() = constants0;
 
 #pragma region PASS 1

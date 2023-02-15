@@ -10,6 +10,7 @@ struct vs_input
 struct vs_output
 {
     float4 position : SV_POSITION;
+    float4 screen_position : SCREEN_POSITION;
     float4 light_position : LIGHT_POSITION;
     float4 normal : NORMAL;
     float4 tex : TEXCOORD;

@@ -35,14 +35,30 @@ float4 cabinet(float4 pos)
     };
     
     return mul(prj, pos);
+} 
+
+float4 project3(float4 v)
+{
+    return float4(v.x, v.y, v.z, 0);
 }
 
 vs_output main(vs_input input)
 {
-	vs_output v;
+    float4x4 P =
+    {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 1, 0,
+    };
+    
+    vs_output v;
     v.position = mul(camera, mul(object, input.position));
+//    v.screen_position = mul(world, mul(object, input.position));
+//    v.screen_position /= v.screen_position.w;
+    
     v.light_position = mul(light_mat, mul(object, input.position));
-    v.normal = normalize(mul(object, input.normal));
+    v.normal = normalize(mul(world, project3(mul(object, input.normal))));
     v.tex = input.tex;
     v.color = input.color;
     v.type = input.type;
